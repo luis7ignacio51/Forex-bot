@@ -21,32 +21,36 @@ st.sidebar.header("Configuración del Análisis")
 periodo = st.sidebar.selectbox("Periodo Histórico", ["5y", "10y", "20y", "max"], index=2)
 dias_entrenamiento = st.sidebar.slider("Días para medias móviles (Corto Plazo)", 10, 50, 50)
 
-# --- FUNCIÓN DE CARGA DE DATOS (CON CACHÉ PARA EFICIENCIA) ---
+# --- FUNCIÓN DE CARGA DE DATOS (CORREGIDA) ---
 @st.cache_data
 def cargar_datos(periodo_ticker):
     # Descargamos datos diarios
     df = yf.download("EURUSD=X", period=periodo_ticker)
     
-    # Aseguramos que el índice es datetime y eliminamos zona horaria para evitar conflictos
+    # === AQUÍ ESTÁ EL ARREGLO ===
+    # Si yfinance nos devuelve columnas dobles (MultiIndex), las aplanamos
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    # ============================
+    
+    # Aseguramos que el índice es datetime y eliminamos zona horaria
     df.index = pd.to_datetime(df.index).tz_localize(None) 
     
-    # 1. INDICADORES TÉCNICOS (Feature Engineering)
-    # RSI: Fuerza relativa
+    # 1. INDICADORES TÉCNICOS
     df['RSI'] = df.ta.rsi(length=14)
-    # EMAs: Medias Móviles Exponenciales
     df['EMA_Fast'] = df.ta.ema(length=dias_entrenamiento)
     df['EMA_Slow'] = df.ta.ema(length=200)
-    # Bandas de Bollinger (Volatilidad)
+    
+    # Bandas de Bollinger
     bb = df.ta.bbands(length=20)
-    # Concatenamos las bandas al dataframe principal
     df = pd.concat([df, bb], axis=1)
 
-    # 2. DEFINIR EL TARGET (OBJETIVO)
-    # Si el precio de cierre de MAÑANA es mayor al de HOY, Target = 1 (Subir), sino 0 (Bajar)
+    # 2. DEFINIR EL TARGET
     df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
     
     df.dropna(inplace=True)
     return df
+
 
 # Cargar los datos
 status_text = st.sidebar.text("Descargando datos del mercado...")
