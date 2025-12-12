@@ -5,34 +5,32 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import precision_score
+from datetime import datetime
+import pytz
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Forex AI Pro", layout="wide")
 st.title("💶 Predicción EUR/USD (Híbrida: Histórico + Yahoo)")
 
-# --- FUNCIÓN DE CÁLCULO (RENOMBRADA PARA LIMPIAR CACHÉ) ---
-# Al cambiar el nombre a 'cargar_datos_v2', forzamos a Streamlit a olvidar el error anterior.
-@st.cache_data
-def cargar_datos_v2():
+# --- FUNCIÓN DE CÁLCULO CON AUTO-REFRESH (TTL) ---
+# ttl=900 significa: "Borra la memoria y descarga nuevo cada 900 segundos (15 min)"
+@st.cache_data(ttl=900)
+def cargar_datos_v3():
     # 1. CARGAR DATOS HISTÓRICOS (CSV)
     df_hist = pd.DataFrame()
     try:
-        # Intentamos leer el archivo.
         df_hist = pd.read_csv("eurusd_hour.csv")
-        
-        # Limpieza del CSV
         df_hist['Datetime'] = pd.to_datetime(df_hist['Date'] + ' ' + df_hist['Time'])
         df_hist.set_index('Datetime', inplace=True)
-        
-        # Seleccionamos columnas y renombramos
         df_hist = df_hist[['BO', 'BH', 'BL', 'BC']].rename(
             columns={'BO': 'Open', 'BH': 'High', 'BL': 'Low', 'BC': 'Close'}
         )
     except Exception:
-        pass # Si falla, seguimos sin histórico
+        pass 
 
     # 2. CARGAR DATOS RECIENTES (YAHOO)
     try:
+        # Descargamos datos recientes
         df_yahoo = yf.download("EURUSD=X", period="2y", interval="1h")
         
         if isinstance(df_yahoo.columns, pd.MultiIndex):
@@ -72,19 +70,24 @@ def procesar_indicadores(df):
 
 # --- EJECUCIÓN VISUAL ---
 
-with st.spinner('Cargando datos (v2)...'):
-    # Llamamos a la nueva función
-    df_raw = cargar_datos_v2()
+# Botón manual para forzar actualización si el usuario quiere
+if st.sidebar.button("🔄 Forzar Actualización de Datos"):
+    st.cache_data.clear() # Borra la caché manualmente
+
+with st.spinner('Actualizando mercado...'):
+    df_raw = cargar_datos_v3()
 
 if not df_raw.empty:
-    st.toast(f"Datos cargados: {len(df_raw)} velas", icon="✅")
+    # Mostrar hora de actualización para seguridad del usuario
+    hora_actual = datetime.now(pytz.timezone('America/La_Paz')).strftime("%H:%M:%S")
+    st.caption(f"🕒 Última comprobación de datos: {hora_actual} (Hora Bolivia/Local)")
     
     df = procesar_indicadores(df_raw)
     
     # --- GRÁFICO ---
-    st.subheader(f"Análisis Técnico (Total: {len(df):,})")
+    st.subheader(f"Análisis Técnico (Último precio: {df['Close'].iloc[-1]:.5f})")
     
-    df_visual = df.tail(168) # Última semana
+    df_visual = df.tail(100) # Últimas 100 horas
     
     fig = go.Figure(data=[go.Candlestick(x=df_visual.index,
                     open=df_visual['Open'], high=df_visual['High'],
@@ -94,15 +97,21 @@ if not df_raw.empty:
     fig.add_trace(go.Scatter(x=df_visual.index, y=df_visual['EMA_Fast'], line=dict(color='orange', width=1), name="EMA 50"))
     fig.add_trace(go.Scatter(x=df_visual.index, y=df_visual['EMA_Slow'], line=dict(color='blue', width=1), name="EMA 200"))
     
-    fig.update_layout(height=400, xaxis_rangeslider_visible=False)
+    fig.update_layout(height=450, xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- BOTÓN DE PREDICCIÓN ---
-    if st.button('🧠 Entrenar IA y Predecir'):
+    # --- PREDICCIÓN ---
+    st.write("---")
+    col_btn, col_info = st.columns([1, 2])
+    
+    with col_btn:
+        btn_predict = st.button('🧠 Analizar y Predecir', type="primary")
         
-        with st.spinner('Entrenando...'):
+    if btn_predict:
+        with st.spinner('La IA está pensando...'):
             features = ['RSI', 'EMA_Fast', 'EMA_Slow', 'Open', 'Close', 'High', 'Low']
             
+            # Entrenamiento robusto
             train = df.iloc[:-500]
             test = df.iloc[-500:]
             
@@ -117,10 +126,13 @@ if not df_raw.empty:
             
             col1, col2 = st.columns(2)
             with col1:
-                st.metric("Precisión Histórica", f"{precision:.2%}")
+                st.metric("Precisión (Backtest)", f"{precision:.2%}")
             with col2:
                 direccion = "SUBIRÁ 📈" if prediccion_futura[0] == 1 else "BAJARÁ 📉"
-                st.metric("Próxima Hora", direccion)
+                # Calculamos a qué hora aplica la predicción
+                hora_prediccion = df.index[-1] + pd.Timedelta(hours=1)
+                st.metric(f"Próximo Cierre (aprox {hora_prediccion.strftime('%H:%M')})", direccion)
 
 else:
-    st.error("No se pudieron cargar datos. Verifica que 'eurusd_hour.csv' esté en GitHub.")
+    st.error("No se pudieron cargar datos. Verifica tu conexión o el archivo CSV.")
+    
