@@ -94,7 +94,7 @@ def procesar_scalping(df, interval):
     len_lenta = 21 if interval == "1m" else 50
     
     df['EMA_Rapida'] = df.ta.ema(length=len_rapida)
-    df['EMA_Lenta'] = df.ta.ema(length=len_lenta) # Filtro de tendencia
+    df['EMA_Lenta'] = df.ta.ema(length=len_lenta) 
     df['RSI'] = df.ta.rsi(length=14)
     
     bb = df.ta.bbands(length=20, std=2)
@@ -188,20 +188,20 @@ with placeholder.container():
                     razon = "IA Bajista pero Tendencia Alcista (Riesgo)"
                     color_box = "#fff3cd"; txt_color = "#856404"; icono = "⚠️"
         
-        # Tiempo
+        # Tiempo (CORREGIDO)
         now = datetime.now(tz_bolivia)
         minutos_actuales = now.minute
+        
         if intervalo == "1m": resto = 60 - now.second
         elif intervalo == "5m": resto = (5 - (minutos_actuales % 5)) * 60 - now.second
         elif intervalo == "15m": resto = (15 - (minutos_actuales % 15)) * 60 - now.second
-        else: resto = (60 - minutes_actuales) * 60 - now.second 
+        else: resto = (60 - minutos_actuales) * 60 - now.second # Ahora usa la variable correcta
         
         # --- UI MEJORADA ---
         c1, c2 = st.columns([2,1])
         c1.markdown(f"### {seleccion} [{intervalo}]")
         c1.markdown(f"<h1 style='margin:0'>${precio:.5f}</h1>", unsafe_allow_html=True)
         
-        # Aquí vuelve el reloj + cuenta atrás
         c2.metric("Cierre de Vela:", f"{resto} seg")
         c2.caption(f"Actualizado: {now.strftime('%H:%M:%S')} (Bolivia)")
         
@@ -231,4 +231,4 @@ if vigilancia:
     sleep_time = 10 if intervalo == "1m" else (30 if intervalo == "5m" else 60)
     time.sleep(sleep_time)
     st.rerun()
-    
+        
