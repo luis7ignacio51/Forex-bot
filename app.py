@@ -24,11 +24,13 @@ pares = {
     "Bitcoin (BTC)": "BTC-USD", "Solana (SOL)": "SOL-USD", "Gold (XAU)": "GC=F"
 }
 if 'activo_scalping' not in st.session_state: st.session_state.activo_scalping = "EUR/USD"
+
 def actualizar(): st.session_state.activo_scalping = st.session_state.sel_scalp
+
 seleccion = st.sidebar.selectbox("Activo:", list(pares.keys()), index=list(pares.keys()).index(st.session_state.activo_scalping), key="sel_scalp", on_change=actualizar)
 ticker = pares[seleccion]
 
-# 2. Selector de Temporalidad (NUEVO)
+# 2. Selector de Temporalidad
 intervalo = st.sidebar.select_slider("Temporalidad (Velas):", options=["1m", "5m", "15m", "1h"], value="1h")
 
 # 3. Ajustes
@@ -41,10 +43,6 @@ def cargar_datos_multitimeframe(ticker, interval):
     df_final = pd.DataFrame()
     nombre_limpio = ticker.replace("=X","").replace("=F","")
     
-    # ESTRATEGIA DE CARGA:
-    # Si es H1 -> Intentamos usar CSV Histórico (Mejor calidad)
-    # Si es M1/M5 -> Usamos Yahoo Finance (Datos recientes en vivo, ya que CSV de H1 no sirve)
-    
     usar_csv = False
     if interval == "1h":
         archivos = [f"{nombre_limpio}.csv", "EURUSD.csv", "GBPUSD.csv", "USDJPY.csv", "SOL-USD.csv"]
@@ -53,7 +51,6 @@ def cargar_datos_multitimeframe(ticker, interval):
                 df = pd.read_csv(f, sep=None, engine='python')
                 df.columns = df.columns.str.replace('<','').str.replace('>','').str.capitalize()
                 
-                # Procesar fecha
                 if 'Date' in df.columns and 'Time' in df.columns:
                     df['Datetime'] = pd.to_datetime(df['Date'].astype(str).str.replace('.','-') + ' ' + df['Time'].astype(str))
                 else:
@@ -69,9 +66,7 @@ def cargar_datos_multitimeframe(ticker, interval):
                 break
             except: continue
 
-    # YAHOO FINANCE (Fundamental para M1/M5)
     try:
-        # Ajustamos el periodo según el intervalo (Yahoo tiene límites)
         per = "7d" if interval == "1m" else ("60d" if interval in ["5m","15m"] else "2y")
         
         df_y = yf.download(ticker, period=per, interval=interval)
@@ -96,39 +91,30 @@ def cargar_datos_multitimeframe(ticker, interval):
 def procesar_scalping(df, interval):
     if df.empty: return df
     
-    # Ajustamos indicadores según velocidad
-    # En M1 necesitamos reacciones más rápidas que en H1
     len_rapida = 9 if interval == "1m" else 20
     len_lenta = 21 if interval == "1m" else 50
     
     df['EMA_Rapida'] = df.ta.ema(length=len_rapida)
     df['EMA_Lenta'] = df.ta.ema(length=len_lenta)
-    df['EMA_200'] = df.ta.ema(length=200) # Tendencia Madre
+    df['EMA_200'] = df.ta.ema(length=200)
     
     df['RSI'] = df.ta.rsi(length=14)
     df['ATR'] = df.ta.atr(length=14)
     
-    # Bandas Bollinger (Rebotes M1)
     bb = df.ta.bbands(length=20, std=2)
     if bb is not None:
         df['BB_Up'] = bb.iloc[:, 1]
         df['BB_Low'] = bb.iloc[:, 0]
         
-    # Agotamiento (CCI)
     df['CCI'] = df.ta.cci(length=14)
 
-    # Patrones de Vela (Matemáticos)
     cuerpo = abs(df['Close'] - df['Open'])
     mecha_sup = df['High'] - np.maximum(df['Close'], df['Open'])
     mecha_inf = np.minimum(df['Close'], df['Open']) - df['Low']
     
-    # Martillo (Bullish) & Estrella (Bearish)
     df['Patron_Bull'] = np.where((mecha_inf > cuerpo*1.5) & (mecha_sup < cuerpo*0.5), 1, 0)
     df['Patron_Bear'] = np.where((mecha_sup > cuerpo*1.5) & (mecha_inf < cuerpo*0.5), 1, 0)
 
-    # TARGET:
-    # En M1/M5, queremos saber si la PRÓXIMA vela es del color opuesto (Reversión) o igual (Continuidad)
-    # Aquí entrenamos para PREDECIR COLOR (1=Verde, 0=Roja)
     df['Target'] = (df['Close'].shift(-1) > df['Open'].shift(-1)).astype(int)
     
     df.dropna(inplace=True)
@@ -139,7 +125,6 @@ def ejecutar_ia_scalper(df):
     features = ['RSI', 'CCI', 'EMA_Rapida', 'EMA_Lenta', 'BB_Up', 'BB_Low', 'Patron_Bull', 'Patron_Bear']
     features = [f for f in features if f in df.columns]
     
-    # Entrenar (Usamos menos historia en M1 para adaptarnos al régimen actual)
     limit = 1000 
     train = df.iloc[-limit:-1]
     
@@ -163,39 +148,34 @@ with placeholder.container():
         df = procesar_scalping(df_raw, intervalo)
         pred, conf = ejecutar_ia_scalper(df)
         
-        # Variables Clave
         precio = df['Close'].iloc[-1]
         rsi = df['RSI'].iloc[-1]
         
-        # Lógica de Decisión (Scalping)
         decision = "ESPERAR"
         color_box = "#e9ecef"
         txt_color = "#333"
         icono = "⏳"
         
-        # Filtros Estrictos para M1/M5
         if conf*100 >= umbral:
-            # CALL: Predicción Verde + (Tendencia Alcista O RSI Sobrevendido)
             if pred == 1:
                 if df['Close'].iloc[-1] > df['EMA_Lenta'].iloc[-1] or rsi < 30:
                     decision = "CALL (ALZA) 🚀"
                     color_box = "#d4edda"; txt_color = "#155724"; icono = "📈"
                     
-            # PUT: Predicción Roja + (Tendencia Bajista O RSI Sobrecomprado)
             elif pred == 0:
                 if df['Close'].iloc[-1] < df['EMA_Lenta'].iloc[-1] or rsi > 70:
                     decision = "PUT (BAJA) 📉"
                     color_box = "#f8d7da"; txt_color = "#721c24"; icono = "📉"
         
-        # Cálculo de tiempo restante vela
+        # --- CORRECCIÓN DE ERROR AQUÍ ---
         now = datetime.now(tz_bolivia)
         minutos_actuales = now.minute
+        
         if intervalo == "1m": resto = 60 - now.second
         elif intervalo == "5m": resto = (5 - (minutos_actuales % 5)) * 60 - now.second
         elif intervalo == "15m": resto = (15 - (minutos_actuales % 15)) * 60 - now.second
-        else: resto = (60 - minutes_actuales) * 60 # H1
+        else: resto = (60 - minutes_actuales) * 60 - now.second if 'minutes_actuales' in locals() else (60 - minutos_actuales) * 60 - now.second # H1 (Corregido)
         
-        # Render
         c1, c2 = st.columns([2,1])
         c1.markdown(f"### {seleccion} [{intervalo}]")
         c1.markdown(f"<h1 style='margin:0'>${precio:.5f}</h1>", unsafe_allow_html=True)
@@ -209,15 +189,12 @@ with placeholder.container():
         </div>
         """, unsafe_allow_html=True)
         
-        # Gráfico Live
-        df_ver = df.tail(60) # Ver últimos 60 periodos (60 mins en M1)
+        df_ver = df.tail(60) 
         fig = go.Figure(data=[go.Candlestick(x=df_ver.index, open=df_ver['Open'], high=df_ver['High'], low=df_ver['Low'], close=df_ver['Close'])])
         
-        # Indicadores en Gráfico
         fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['EMA_Rapida'], line=dict(color='orange', width=1), name=f'EMA Rapida'))
         fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['EMA_Lenta'], line=dict(color='cyan', width=1), name=f'EMA Lenta'))
         
-        # Bandas Bollinger (Esenciales para Scalping)
         fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['BB_Up'], line=dict(color='gray', width=1, dash='dot'), name='BB Sup'))
         fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['BB_Low'], line=dict(color='gray', width=1, dash='dot'), name='BB Inf'))
         
@@ -227,8 +204,8 @@ with placeholder.container():
     else:
         st.warning("Cargando datos... (Si usas M1, Yahoo solo da los últimos 7 días)")
 
-# Refresh ultra-rápido para M1
 if vigilancia:
     sleep_time = 10 if intervalo == "1m" else (30 if intervalo == "5m" else 60)
     time.sleep(sleep_time)
     st.rerun()
+                
