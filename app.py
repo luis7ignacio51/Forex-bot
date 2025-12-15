@@ -10,8 +10,8 @@ import time
 import numpy as np
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Scalping AI Pro", layout="wide", page_icon="⚡")
-st.title("⚡ Scalping AI Pro (M1/M5/H1 Multi-Timeframe)")
+st.set_page_config(page_title="Scalping AI Master", layout="wide", page_icon="🧠")
+st.title("🧠 Scalping AI Master (Diagnóstico en Vivo)")
 
 tz_bolivia = pytz.timezone('America/La_Paz')
 
@@ -31,13 +31,13 @@ seleccion = st.sidebar.selectbox("Activo:", list(pares.keys()), index=list(pares
 ticker = pares[seleccion]
 
 # 2. Selector de Temporalidad
-intervalo = st.sidebar.select_slider("Temporalidad (Velas):", options=["1m", "5m", "15m", "1h"], value="1h")
+intervalo = st.sidebar.select_slider("Temporalidad:", options=["1m", "5m", "15m", "1h"], value="1h")
 
 # 3. Ajustes
 umbral = st.sidebar.slider("Confianza IA (%)", 55, 95, 70)
 vigilancia = st.sidebar.checkbox("🚨 Auto-Escaneo (Live)", value=False)
 
-# --- 1. MOTOR DE DATOS HÍBRIDO ---
+# --- 1. MOTOR DE DATOS ---
 @st.cache_data(ttl=30 if intervalo in ['1m','5m'] else 60) 
 def cargar_datos_multitimeframe(ticker, interval):
     df_final = pd.DataFrame()
@@ -68,7 +68,6 @@ def cargar_datos_multitimeframe(ticker, interval):
 
     try:
         per = "7d" if interval == "1m" else ("60d" if interval in ["5m","15m"] else "2y")
-        
         df_y = yf.download(ticker, period=per, interval=interval)
         if isinstance(df_y.columns, pd.MultiIndex): df_y.columns = df_y.columns.get_level_values(0)
         df_y.index = pd.to_datetime(df_y.index).tz_localize(None)
@@ -87,7 +86,7 @@ def cargar_datos_multitimeframe(ticker, interval):
         
     return df_final
 
-# --- 2. PROCESAMIENTO ADAPTATIVO ---
+# --- 2. PROCESAMIENTO ---
 def procesar_scalping(df, interval):
     if df.empty: return df
     
@@ -95,11 +94,8 @@ def procesar_scalping(df, interval):
     len_lenta = 21 if interval == "1m" else 50
     
     df['EMA_Rapida'] = df.ta.ema(length=len_rapida)
-    df['EMA_Lenta'] = df.ta.ema(length=len_lenta)
-    df['EMA_200'] = df.ta.ema(length=200)
-    
+    df['EMA_Lenta'] = df.ta.ema(length=len_lenta) # Filtro de tendencia
     df['RSI'] = df.ta.rsi(length=14)
-    df['ATR'] = df.ta.atr(length=14)
     
     bb = df.ta.bbands(length=20, std=2)
     if bb is not None:
@@ -120,7 +116,7 @@ def procesar_scalping(df, interval):
     df.dropna(inplace=True)
     return df
 
-# --- 3. IA SCALPER ---
+# --- 3. IA ---
 def ejecutar_ia_scalper(df):
     features = ['RSI', 'CCI', 'EMA_Rapida', 'EMA_Lenta', 'BB_Up', 'BB_Low', 'Patron_Bull', 'Patron_Bear']
     features = [f for f in features if f in df.columns]
@@ -137,7 +133,7 @@ def ejecutar_ia_scalper(df):
     
     return pred, max(prob)
 
-# --- 4. INTERFAZ VISUAL ---
+# --- 4. INTERFAZ ---
 if st.sidebar.button("Forzar Recarga"): st.cache_data.clear()
 placeholder = st.empty()
 
@@ -148,64 +144,91 @@ with placeholder.container():
         df = procesar_scalping(df_raw, intervalo)
         pred, conf = ejecutar_ia_scalper(df)
         
+        # Datos
         precio = df['Close'].iloc[-1]
         rsi = df['RSI'].iloc[-1]
+        ema_trend = df['EMA_Lenta'].iloc[-1]
         
+        # --- LÓGICA DE DIAGNÓSTICO ---
         decision = "ESPERAR"
-        color_box = "#e9ecef"
-        txt_color = "#333"
-        icono = "⏳"
+        razon = "Analizando..."
+        color_box = "#e9ecef"; txt_color = "#333"; icono = "⏳"
         
-        if conf*100 >= umbral:
-            if pred == 1:
-                if df['Close'].iloc[-1] > df['EMA_Lenta'].iloc[-1] or rsi < 30:
+        # 1. Chequeo de Confianza IA
+        if conf*100 < umbral:
+            razon = f"Confianza IA Baja ({conf:.1%} < {umbral}%)"
+            icono = "🤖"
+        else:
+            # 2. Chequeo de Filtros Técnicos
+            if pred == 1: # IA dice SUBIR
+                if df['Close'].iloc[-1] > ema_trend: # A favor de tendencia
                     decision = "CALL (ALZA) 🚀"
+                    razon = "IA + Tendencia Alcista Confirmada"
                     color_box = "#d4edda"; txt_color = "#155724"; icono = "📈"
+                elif rsi < 30: # Rebote
+                    decision = "CALL (REBOTE) 🚀"
+                    razon = "IA + RSI Sobrevendido (Rebote)"
+                    color_box = "#d4edda"; txt_color = "#155724"; icono = "📈"
+                else:
+                    decision = "ESPERAR ✋"
+                    razon = "IA Alcista pero Tendencia Bajista (Riesgo)"
+                    color_box = "#fff3cd"; txt_color = "#856404"; icono = "⚠️"
                     
-            elif pred == 0:
-                if df['Close'].iloc[-1] < df['EMA_Lenta'].iloc[-1] or rsi > 70:
+            elif pred == 0: # IA dice BAJAR
+                if df['Close'].iloc[-1] < ema_trend: # A favor de tendencia
                     decision = "PUT (BAJA) 📉"
+                    razon = "IA + Tendencia Bajista Confirmada"
                     color_box = "#f8d7da"; txt_color = "#721c24"; icono = "📉"
+                elif rsi > 70: # Rebote
+                    decision = "PUT (REBOTE) 📉"
+                    razon = "IA + RSI Sobrecomprado (Rebote)"
+                    color_box = "#f8d7da"; txt_color = "#721c24"; icono = "📉"
+                else:
+                    decision = "ESPERAR ✋"
+                    razon = "IA Bajista pero Tendencia Alcista (Riesgo)"
+                    color_box = "#fff3cd"; txt_color = "#856404"; icono = "⚠️"
         
-        # --- CORRECCIÓN DE ERROR AQUÍ ---
+        # Tiempo
         now = datetime.now(tz_bolivia)
         minutos_actuales = now.minute
-        
         if intervalo == "1m": resto = 60 - now.second
         elif intervalo == "5m": resto = (5 - (minutos_actuales % 5)) * 60 - now.second
         elif intervalo == "15m": resto = (15 - (minutos_actuales % 15)) * 60 - now.second
-        else: resto = (60 - minutes_actuales) * 60 - now.second if 'minutes_actuales' in locals() else (60 - minutos_actuales) * 60 - now.second # H1 (Corregido)
+        else: resto = (60 - minutes_actuales) * 60 - now.second 
         
+        # --- UI MEJORADA ---
         c1, c2 = st.columns([2,1])
         c1.markdown(f"### {seleccion} [{intervalo}]")
         c1.markdown(f"<h1 style='margin:0'>${precio:.5f}</h1>", unsafe_allow_html=True)
-        c2.metric("Cierre de Vela en:", f"{resto} seg")
+        
+        # Aquí vuelve el reloj + cuenta atrás
+        c2.metric("Cierre de Vela:", f"{resto} seg")
+        c2.caption(f"Actualizado: {now.strftime('%H:%M:%S')} (Bolivia)")
         
         st.markdown(f"""
         <div style="background-color: {color_box}; padding: 20px; border-radius: 15px; border: 3px solid {txt_color}; text-align: center;">
             <h1 style="color: {txt_color}; margin:0; font-size: 40px;">{icono}</h1>
             <h2 style="color: {txt_color}; margin:0;">{decision}</h2>
-            <p style="color: {txt_color}; font-weight: bold;">Confianza IA: {conf:.1%} (Meta: {umbral}%)</p>
+            <hr style="border-color: {txt_color}; opacity: 0.2">
+            <p style="color: {txt_color}; margin:0; font-weight: bold;">Diagnóstico: {razon}</p>
+            <p style="color: {txt_color}; margin:0; font-size: 14px;">Confianza IA: {conf:.1%}</p>
         </div>
         """, unsafe_allow_html=True)
         
         df_ver = df.tail(60) 
         fig = go.Figure(data=[go.Candlestick(x=df_ver.index, open=df_ver['Open'], high=df_ver['High'], low=df_ver['Low'], close=df_ver['Close'])])
-        
-        fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['EMA_Rapida'], line=dict(color='orange', width=1), name=f'EMA Rapida'))
-        fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['EMA_Lenta'], line=dict(color='cyan', width=1), name=f'EMA Lenta'))
-        
+        fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['EMA_Rapida'], line=dict(color='orange', width=1), name='EMA Rápida'))
+        fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['EMA_Lenta'], line=dict(color='cyan', width=1), name='Tendencia (EMA Lenta)'))
         fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['BB_Up'], line=dict(color='gray', width=1, dash='dot'), name='BB Sup'))
         fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['BB_Low'], line=dict(color='gray', width=1, dash='dot'), name='BB Inf'))
-        
         fig.update_layout(height=400, template="plotly_white", xaxis_rangeslider_visible=False, margin=dict(t=10,b=0))
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.warning("Cargando datos... (Si usas M1, Yahoo solo da los últimos 7 días)")
+        st.warning("Cargando datos... (Recuerda: M1 solo tiene datos recientes de Yahoo)")
 
 if vigilancia:
     sleep_time = 10 if intervalo == "1m" else (30 if intervalo == "5m" else 60)
     time.sleep(sleep_time)
     st.rerun()
-                
+    
