@@ -15,12 +15,8 @@ st.title("💷 Forex Sniper Ultimate (Soporte Histórico MT4/MT5)")
 
 tz_bolivia = pytz.timezone('America/La_Paz')
 
-# --- MEMORIA ---
-if 'activo_forex' not in st.session_state:
-    st.session_state.activo_forex = "GBP/USD"
-
-# --- SIDEBAR ---
-st.sidebar.header("🏦 Sala de Operaciones")
+# --- 1. DEFINICIÓN DE PARES (PRIMERO) ---
+# Definimos la lista antes de usarla para evitar errores
 pares = {
     "GBP/USD (Libra)": "GBPUSD=X",
     "EUR/USD (Euro)": "EURUSD=X",
@@ -29,6 +25,17 @@ pares = {
     "USD/CAD (Canadiense)": "CAD=X",
     "XAU/USD (Oro)": "GC=F"
 }
+
+# --- 2. GESTIÓN DE MEMORIA A PRUEBA DE ERRORES ---
+if 'activo_forex' not in st.session_state:
+    st.session_state.activo_forex = "GBP/USD (Libra)"
+
+# AUTO-CORRECCIÓN: Si el valor en memoria no existe en la lista nueva (ej: viene de versión vieja), lo reseteamos.
+if st.session_state.activo_forex not in pares:
+    st.session_state.activo_forex = list(pares.keys())[0]
+
+# --- BARRA LATERAL ---
+st.sidebar.header("🏦 Sala de Operaciones")
 
 def actualizar_seleccion():
     st.session_state.activo_forex = st.session_state.selector_forex
@@ -45,57 +52,48 @@ ticker_actual = pares[seleccion]
 vigilancia = st.sidebar.checkbox("🚨 Activar Radar Institucional", value=False)
 frecuencia = st.sidebar.slider("Frecuencia (seg)", 10, 300, 60)
 
-# --- 1. MOTOR DE DATOS INTELIGENTE (ADAPTADO A TU CSV) ---
+# --- 3. MOTOR DE DATOS INTELIGENTE ---
 @st.cache_data(ttl=60) 
 def cargar_datos_forex(ticker):
     df_final = pd.DataFrame()
-    
-    # Nombre base limpio (GBPUSD, EURUSD...)
     nombre_limpio = ticker.replace("=X","").replace("=F","")
     
-    # Lista de posibles nombres de archivo que podrías subir
     posibles_archivos = [
-        f"{nombre_limpio}.csv",              # GBPUSD.csv
-        f"{nombre_limpio}_PERIOD_H1.csv",    # GBPUSD_PERIOD_H1.csv (Tu archivo)
+        f"{nombre_limpio}.csv",              
+        f"{nombre_limpio}_PERIOD_H1.csv",    
         f"{nombre_limpio}1h.csv",
-        "eurusd_hour.csv"
+        "eurusd_hour.csv",
+        "GBPUSD_PERIOD_H1.csv" # Agregado explícitamente por si acaso
     ]
     
     # A. INTENTAR CARGAR CSV HISTÓRICO
     for archivo in posibles_archivos:
         try:
-            # Leer CSV
             df_hist = pd.read_csv(archivo)
             
             # CASO 1: Fecha y Hora separadas (Tu archivo GBPUSD)
             if 'Date' in df_hist.columns and 'Time' in df_hist.columns:
-                # Fusionamos Date + Time en una sola columna
                 df_hist['Datetime'] = pd.to_datetime(df_hist['Date'].astype(str) + ' ' + df_hist['Time'].astype(str))
                 df_hist.set_index('Datetime', inplace=True)
-                st.toast(f"📂 Archivo MT4/MT5 detectado: {archivo}", icon="✅")
+                # st.toast no funciona bien dentro de caché en algunas versiones, lo quitamos por seguridad
             
-            # CASO 2: Fecha junta (Archivos estándar)
+            # CASO 2: Fecha junta
             else:
                 col_fecha = next((c for c in df_hist.columns if 'date' in c.lower() or 'time' in c.lower()), None)
                 if col_fecha:
                     df_hist['Datetime'] = pd.to_datetime(df_hist[col_fecha])
                     df_hist.set_index('Datetime', inplace=True)
 
-            # Normalizar columnas (Open, High, Low...)
             df_hist.rename(columns=lambda x: x.capitalize(), inplace=True)
-            
-            # Filtrar solo lo necesario
             cols_req = [c for c in ['Open', 'High', 'Low', 'Close', 'Volume'] if c in df_hist.columns]
             df_final = df_hist[cols_req]
-            
-            # Limpieza básica
             df_final = df_final[df_final.index <= datetime.now()]
-            break # Si funcionó, dejamos de buscar
+            break 
             
         except Exception:
             continue
 
-    # B. YAHOO FINANCE (Relleno de datos recientes)
+    # B. YAHOO FINANCE
     try:
         df_yahoo = yf.download(ticker, period="2y", interval="1h")
         if isinstance(df_yahoo.columns, pd.MultiIndex):
@@ -103,61 +101,48 @@ def cargar_datos_forex(ticker):
         df_yahoo.index = pd.to_datetime(df_yahoo.index).tz_localize(None)
         
         if not df_final.empty:
-            # Asegurar compatibilidad de zona horaria
             if df_final.index.tz is not None: df_final.index = df_final.index.tz_localize(None)
-            
-            # Fusionar: Histórico antiguo + Yahoo reciente
             df_final = pd.concat([df_final, df_yahoo])
             df_final = df_final[~df_final.index.duplicated(keep='last')]
         else:
-            df_final = df_yahoo
-            
+            df_final = df_yahoo     
     except:
         pass
 
     if not df_final.empty: 
         df_final.sort_index(inplace=True)
-        # Convertir a números por si acaso vienen como texto
         for c in df_final.columns:
             df_final[c] = pd.to_numeric(df_final[c], errors='coerce')
         df_final.dropna(inplace=True)
         
     return df_final
 
-# --- 2. PROCESAMIENTO FOREX ---
+# --- 4. PROCESAMIENTO ---
 def procesar_forex(df):
     if df.empty: return df
     
-    # Indicadores
     df['EMA_50'] = df.ta.ema(length=50)
     df['EMA_200'] = df.ta.ema(length=200)
     df['RSI'] = df.ta.rsi(length=14)
     df['ATR'] = df.ta.atr(length=14)
     
-    # ADX (Fuerza)
     adx = df.ta.adx(length=14)
     if adx is not None and not adx.empty:
-        # pandas_ta devuelve 3 columnas (ADX, DMP, DMN), tomamos la primera
         df['ADX'] = adx.iloc[:, 0]
 
-    # Killzones (Horarios)
     df['Hora'] = df.index.hour
-    # Londres (7-16) y NY (12-21) son las horas "calientes"
     cond_volumen = (df['Hora'] >= 7) & (df['Hora'] <= 20)
     df['Sesion_Activa'] = np.where(cond_volumen, 1, 0)
-
-    # Target
     df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
     
     df.dropna(inplace=True)
     return df
 
-# --- 3. IA ---
+# --- 5. IA ---
 def ejecutar_ia_forex(df):
     features = ['RSI', 'EMA_50', 'EMA_200', 'ATR', 'ADX', 'Sesion_Activa', 'Hora']
     features = [f for f in features if f in df.columns]
     
-    # Usamos más historia para entrenar ya que tenemos 30 años
     limit_train = 5000 if len(df) > 10000 else 1000
     train = df.iloc[-limit_train:] 
     
@@ -170,7 +155,7 @@ def ejecutar_ia_forex(df):
     
     return prediccion, max(probabilidad), features
 
-# --- 4. INTERFAZ ---
+# --- 6. INTERFAZ ---
 if st.sidebar.button("Forzar Recarga"): st.cache_data.clear()
 
 placeholder = st.empty()
@@ -182,17 +167,11 @@ with placeholder.container():
         df = procesar_forex(df_raw)
         pred, conf, feats = ejecutar_ia_forex(df)
         
-        # Variables actuales
         precio = df['Close'].iloc[-1]
         adx_val = df['ADX'].iloc[-1] if 'ADX' in df.columns else 0
-        sesion = df['Sesion_Activa'].iloc[-1]
         ema_50 = df['EMA_50'].iloc[-1]
         atr_val = df['ATR'].iloc[-1]
         tendencia = "ALCISTA" if precio > df['EMA_200'].iloc[-1] else "BAJISTA"
-        
-        # --- LÓGICA DE DECISIÓN ---
-        # Filtro 1: ADX > 20 (Evitar rangos muertos)
-        # Filtro 2: Sesión Activa (Evitar spread nocturno)
         
         decision = "NEUTRO"
         color_box = "#e2e3e5"
@@ -214,15 +193,13 @@ with placeholder.container():
         else:
             decision = "MERCADO LATERAL (ADX Bajo) 💤"
         
-        # HEADER
         hora_local = datetime.now(tz_bolivia).strftime("%H:%M:%S")
         c1, c2 = st.columns([2,1])
         c1.markdown(f"### {seleccion} <span style='font-size:26px'>${precio:,.5f}</span>", unsafe_allow_html=True)
         
-        origen = "CSV Histórico + Yahoo" if len(df) > 20000 else "Yahoo Finance (Reciente)"
+        origen = "CSV Histórico + Yahoo" if len(df) > 20000 else "Yahoo Finance"
         c2.caption(f"Fuente: {origen} | {hora_local}")
 
-        # TARJETA PRINCIPAL
         st.markdown(f"""
         <div style="background-color: {color_box}; padding: 20px; border-radius: 10px; border-left: 6px solid {text_color}; margin-bottom: 20px;">
             <h2 style="color: {text_color}; margin:0;">{decision}</h2>
@@ -232,12 +209,10 @@ with placeholder.container():
         </div>
         """, unsafe_allow_html=True)
 
-        # NIVELES
         if "LONG" in decision or "SHORT" in decision:
             c_ent, c_sl, c_tp = st.columns(3)
             c_ent.info(f"📍 Entrada (EMA50): {ema_50:.5f}")
             
-            # SL = 1.5 ATR | TP = 3 ATR (Ratio 1:2)
             factor = 1.5
             if "LONG" in decision:
                 sl = precio - (atr_val * factor)
@@ -249,7 +224,6 @@ with placeholder.container():
             c_sl.error(f"🛑 Stop Loss: {sl:.5f}")
             c_tp.success(f"💰 Take Profit: {tp:.5f}")
 
-        # GRÁFICO
         df_ver = df.tail(120)
         fig = go.Figure()
         fig.add_trace(go.Candlestick(x=df_ver.index, open=df_ver['Open'], high=df_ver['High'], low=df_ver['Low'], close=df_ver['Close'], name='Precio'))
@@ -259,9 +233,9 @@ with placeholder.container():
         st.plotly_chart(fig, use_container_width=True)
 
     else:
-        st.error("No se encontraron datos. Verifica que el archivo CSV esté subido o Yahoo funcione.")
+        st.error("No se encontraron datos. Verifica tus archivos CSV.")
 
 if vigilancia:
     time.sleep(frecuencia)
     st.rerun()
-            
+    
