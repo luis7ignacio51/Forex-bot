@@ -10,23 +10,23 @@ import time
 import numpy as np
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Forex Sniper Pro", layout="wide", page_icon="💶")
-st.title("💶 Forex Sniper Pro (EUR/USD Institucional)")
+st.set_page_config(page_title="Forex Sniper Ultimate", layout="wide", page_icon="💷")
+st.title("💷 Forex Sniper Ultimate (Soporte Histórico MT4/MT5)")
 
-tz_bolivia = pytz.timezone('America/La_Paz') # Ajusta a tu zona horaria
+tz_bolivia = pytz.timezone('America/La_Paz')
 
-# --- MEMORIA DE SESIÓN ---
+# --- MEMORIA ---
 if 'activo_forex' not in st.session_state:
-    st.session_state.activo_forex = "EUR/USD"
+    st.session_state.activo_forex = "GBP/USD"
 
-# --- BARRA LATERAL ---
+# --- SIDEBAR ---
 st.sidebar.header("🏦 Sala de Operaciones")
 pares = {
-    "EUR/USD": "EURUSD=X",
-    "GBP/USD": "GBPUSD=X",
-    "USD/JPY": "JPY=X",
-    "AUD/USD": "AUDUSD=X",
-    "USD/CAD": "CAD=X",
+    "GBP/USD (Libra)": "GBPUSD=X",
+    "EUR/USD (Euro)": "EURUSD=X",
+    "USD/JPY (Yen)": "JPY=X",
+    "AUD/USD (Australiano)": "AUDUSD=X",
+    "USD/CAD (Canadiense)": "CAD=X",
     "XAU/USD (Oro)": "GC=F"
 }
 
@@ -42,100 +42,109 @@ seleccion = st.sidebar.selectbox(
 )
 ticker_actual = pares[seleccion]
 
-# --- MODO AUTO-TRADING ---
-vigilancia = st.sidebar.checkbox("🚨 Activar Radar Institucional (Auto)", value=False)
-frecuencia = st.sidebar.slider("Velocidad de Escaneo (seg)", 10, 300, 60)
+vigilancia = st.sidebar.checkbox("🚨 Activar Radar Institucional", value=False)
+frecuencia = st.sidebar.slider("Frecuencia (seg)", 10, 300, 60)
 
-# --- 1. MOTOR DE DATOS (HÍBRIDO) ---
+# --- 1. MOTOR DE DATOS INTELIGENTE (ADAPTADO A TU CSV) ---
 @st.cache_data(ttl=60) 
 def cargar_datos_forex(ticker):
     df_final = pd.DataFrame()
     
-    # Nombre de archivo limpio (ej: EURUSD.csv)
-    nombre_limpio = ticker.replace("=X","").replace("=F","") + ".csv"
+    # Nombre base limpio (GBPUSD, EURUSD...)
+    nombre_limpio = ticker.replace("=X","").replace("=F","")
     
-    # A. Intentar CSV Histórico (Si consigues uno de 10 años, ponlo aquí)
-    try:
-        # Intentamos leer archivos comunes
-        posibles_nombres = [nombre_limpio, "eurusd_hour.csv", "EURUSD_1h.csv"]
-        for f in posibles_nombres:
-            try:
-                df_hist = pd.read_csv(f)
-                # Detección inteligente de fecha
+    # Lista de posibles nombres de archivo que podrías subir
+    posibles_archivos = [
+        f"{nombre_limpio}.csv",              # GBPUSD.csv
+        f"{nombre_limpio}_PERIOD_H1.csv",    # GBPUSD_PERIOD_H1.csv (Tu archivo)
+        f"{nombre_limpio}1h.csv",
+        "eurusd_hour.csv"
+    ]
+    
+    # A. INTENTAR CARGAR CSV HISTÓRICO
+    for archivo in posibles_archivos:
+        try:
+            # Leer CSV
+            df_hist = pd.read_csv(archivo)
+            
+            # CASO 1: Fecha y Hora separadas (Tu archivo GBPUSD)
+            if 'Date' in df_hist.columns and 'Time' in df_hist.columns:
+                # Fusionamos Date + Time en una sola columna
+                df_hist['Datetime'] = pd.to_datetime(df_hist['Date'].astype(str) + ' ' + df_hist['Time'].astype(str))
+                df_hist.set_index('Datetime', inplace=True)
+                st.toast(f"📂 Archivo MT4/MT5 detectado: {archivo}", icon="✅")
+            
+            # CASO 2: Fecha junta (Archivos estándar)
+            else:
                 col_fecha = next((c for c in df_hist.columns if 'date' in c.lower() or 'time' in c.lower()), None)
-                if col_fecha: 
+                if col_fecha:
                     df_hist['Datetime'] = pd.to_datetime(df_hist[col_fecha])
                     df_hist.set_index('Datetime', inplace=True)
-                    # Normalizar columnas
-                    df_hist.rename(columns=lambda x: x.capitalize(), inplace=True)
-                    # Filtrar columnas necesarias
-                    cols_req = [c for c in ['Open', 'High', 'Low', 'Close', 'Volume'] if c in df_hist.columns]
-                    df_final = df_hist[cols_req]
-                    break # Si funcionó, salimos del bucle
-            except:
-                continue
-    except:
-        pass
 
-    # B. Yahoo Finance (Relleno o base)
+            # Normalizar columnas (Open, High, Low...)
+            df_hist.rename(columns=lambda x: x.capitalize(), inplace=True)
+            
+            # Filtrar solo lo necesario
+            cols_req = [c for c in ['Open', 'High', 'Low', 'Close', 'Volume'] if c in df_hist.columns]
+            df_final = df_hist[cols_req]
+            
+            # Limpieza básica
+            df_final = df_final[df_final.index <= datetime.now()]
+            break # Si funcionó, dejamos de buscar
+            
+        except Exception:
+            continue
+
+    # B. YAHOO FINANCE (Relleno de datos recientes)
     try:
-        # Descargamos máximo permitido por Yahoo para 1h (730 días)
         df_yahoo = yf.download(ticker, period="2y", interval="1h")
         if isinstance(df_yahoo.columns, pd.MultiIndex):
             df_yahoo.columns = df_yahoo.columns.get_level_values(0)
         df_yahoo.index = pd.to_datetime(df_yahoo.index).tz_localize(None)
         
         if not df_final.empty:
-            # Asegurar que ambos índices no tengan zona horaria
+            # Asegurar compatibilidad de zona horaria
             if df_final.index.tz is not None: df_final.index = df_final.index.tz_localize(None)
             
+            # Fusionar: Histórico antiguo + Yahoo reciente
             df_final = pd.concat([df_final, df_yahoo])
             df_final = df_final[~df_final.index.duplicated(keep='last')]
         else:
             df_final = df_yahoo
+            
     except:
         pass
 
     if not df_final.empty: 
         df_final.sort_index(inplace=True)
-        # Filtro de limpieza final
-        df_final = df_final[df_final['Close'] > 0]
+        # Convertir a números por si acaso vienen como texto
+        for c in df_final.columns:
+            df_final[c] = pd.to_numeric(df_final[c], errors='coerce')
+        df_final.dropna(inplace=True)
         
     return df_final
 
-# --- 2. INGENIERÍA DE DATOS FOREX ---
+# --- 2. PROCESAMIENTO FOREX ---
 def procesar_forex(df):
     if df.empty: return df
     
-    # --- A. Indicadores Técnicos ---
+    # Indicadores
     df['EMA_50'] = df.ta.ema(length=50)
-    df['EMA_200'] = df.ta.ema(length=200) # Tendencia Madre
+    df['EMA_200'] = df.ta.ema(length=200)
     df['RSI'] = df.ta.rsi(length=14)
-    df['ATR'] = df.ta.atr(length=14)      # Volatilidad
+    df['ATR'] = df.ta.atr(length=14)
     
-    # ADX (Fuerza de Tendencia) - CRUCIAL en Forex
-    # Si ADX < 20, el mercado está lateral (Rango). No operar.
+    # ADX (Fuerza)
     adx = df.ta.adx(length=14)
     if adx is not None and not adx.empty:
-        df = pd.concat([df, adx], axis=1)
-        # Renombrar columna ADX (pandas_ta a veces usa nombres raros)
-        col_adx = [c for c in df.columns if 'ADX' in c][0]
-        df['ADX'] = df[col_adx]
+        # pandas_ta devuelve 3 columnas (ADX, DMP, DMN), tomamos la primera
+        df['ADX'] = adx.iloc[:, 0]
 
-    # --- B. Filtros de Sesión (Killzones) ---
-    # La IA debe saber si es hora de Londres (Volatilidad) o Asia (Calma)
-    # Asumimos hora UTC en los datos (Yahoo suele dar UTC)
+    # Killzones (Horarios)
     df['Hora'] = df.index.hour
-    
-    # Definimos Sesiones (Aprox UTC):
-    # Londres: 07:00 - 16:00
-    # Nueva York: 12:00 - 21:00
-    # Asia: 00:00 - 09:00
-    
-    # Creamos una feature "Sesion_Activa" (1 si es Londres/NY, 0 si es Asia/Cierre)
-    # Esto enseña a la IA a priorizar señales en horarios de volumen
-    cond_londres_ny = (df['Hora'] >= 7) & (df['Hora'] <= 20)
-    df['Sesion_Activa'] = np.where(cond_londres_ny, 1, 0)
+    # Londres (7-16) y NY (12-21) son las horas "calientes"
+    cond_volumen = (df['Hora'] >= 7) & (df['Hora'] <= 20)
+    df['Sesion_Activa'] = np.where(cond_volumen, 1, 0)
 
     # Target
     df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
@@ -143,18 +152,15 @@ def procesar_forex(df):
     df.dropna(inplace=True)
     return df
 
-# --- 3. CEREBRO IA INSTITUCIONAL ---
+# --- 3. IA ---
 def ejecutar_ia_forex(df):
-    # Features optimizadas para Forex
     features = ['RSI', 'EMA_50', 'EMA_200', 'ATR', 'ADX', 'Sesion_Activa', 'Hora']
-    
-    # Verificar que existan todas
     features = [f for f in features if f in df.columns]
     
-    # Entrenar (Ventana rodante de 1000 velas para captar el régimen actual)
-    train = df.iloc[-1000:] 
+    # Usamos más historia para entrenar ya que tenemos 30 años
+    limit_train = 5000 if len(df) > 10000 else 1000
+    train = df.iloc[-limit_train:] 
     
-    # Modelo más robusto
     model = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
     model.fit(train[features], train["Target"])
     
@@ -162,10 +168,10 @@ def ejecutar_ia_forex(df):
     prediccion = model.predict(ultimo_dato)[0]
     probabilidad = model.predict_proba(ultimo_dato)[0]
     
-    return prediccion, max(probabilidad), model.feature_importances_, features
+    return prediccion, max(probabilidad), features
 
 # --- 4. INTERFAZ ---
-if st.sidebar.button("Forzar Análisis Manual"): st.cache_data.clear()
+if st.sidebar.button("Forzar Recarga"): st.cache_data.clear()
 
 placeholder = st.empty()
 
@@ -174,108 +180,88 @@ with placeholder.container():
 
     if not df_raw.empty:
         df = procesar_forex(df_raw)
+        pred, conf, feats = ejecutar_ia_forex(df)
         
-        # Ejecutar IA
-        pred, conf, importancias, feat_names = ejecutar_ia_forex(df)
-        
-        # Datos en tiempo real
+        # Variables actuales
         precio = df['Close'].iloc[-1]
-        adx_val = df['ADX'].iloc[-1]
-        rsi_val = df['RSI'].iloc[-1]
+        adx_val = df['ADX'].iloc[-1] if 'ADX' in df.columns else 0
+        sesion = df['Sesion_Activa'].iloc[-1]
         ema_50 = df['EMA_50'].iloc[-1]
         atr_val = df['ATR'].iloc[-1]
-        sesion_actual = df['Sesion_Activa'].iloc[-1]
-        
-        # --- LÓGICA DE FILTRADO (EL SECRETO DEL ÉXITO) ---
-        # No operamos si el ADX es muy bajo (mercado muerto)
-        filtro_adx = adx_val > 20 
-        
         tendencia = "ALCISTA" if precio > df['EMA_200'].iloc[-1] else "BAJISTA"
         
-        estado = "NEUTRO"
-        color_bg = "#f0f2f6"
-        color_txt = "#31333F"
+        # --- LÓGICA DE DECISIÓN ---
+        # Filtro 1: ADX > 20 (Evitar rangos muertos)
+        # Filtro 2: Sesión Activa (Evitar spread nocturno)
         
-        # Reglas de Entrada Sniper
-        if filtro_adx:
-            if tendencia == "ALCISTA" and pred == 1 and sesion_actual == 1:
-                estado = "LONG (COMPRA) 💶"
-                color_bg = "#d1e7dd" # Verde
-                color_txt = "#0f5132"
-            elif tendencia == "BAJISTA" and pred == 0 and sesion_actual == 1:
-                estado = "SHORT (VENTA) 📉"
-                color_bg = "#f8d7da" # Rojo
-                color_txt = "#842029"
-            elif sesion_actual == 0:
-                estado = "ESPERAR (Volumen Bajo)"
-                color_bg = "#fff3cd" # Amarillo
-                color_txt = "#664d03"
+        decision = "NEUTRO"
+        color_box = "#e2e3e5"
+        text_color = "#383d41"
+        
+        if adx_val > 20:
+            if tendencia == "ALCISTA" and pred == 1:
+                decision = "LONG (COMPRA) 🚀"
+                color_box = "#d4edda"
+                text_color = "#155724"
+            elif tendencia == "BAJISTA" and pred == 0:
+                decision = "SHORT (VENTA) 📉"
+                color_box = "#f8d7da"
+                text_color = "#721c24"
             else:
-                estado = "ESPERAR (Sin Confirmación)"
+                decision = "ESPERAR (Divergencia) ✋"
+                color_box = "#fff3cd"
+                text_color = "#856404"
         else:
-            estado = "RANGO / MERCADO LATERAL 💤"
-            color_bg = "#e2e3e5" # Gris
-            color_txt = "#41464b"
-
-        # --- VISUALIZACIÓN ---
-        hora_local = datetime.now(tz_bolivia).strftime("%H:%M:%S")
+            decision = "MERCADO LATERAL (ADX Bajo) 💤"
         
-        c1, c2 = st.columns([2, 1])
-        c1.markdown(f"### {seleccion} <span style='font-size:28px'>${precio:,.5f}</span>", unsafe_allow_html=True)
-        c2.caption(f"Actualizado: {hora_local}")
+        # HEADER
+        hora_local = datetime.now(tz_bolivia).strftime("%H:%M:%S")
+        c1, c2 = st.columns([2,1])
+        c1.markdown(f"### {seleccion} <span style='font-size:26px'>${precio:,.5f}</span>", unsafe_allow_html=True)
+        
+        origen = "CSV Histórico + Yahoo" if len(df) > 20000 else "Yahoo Finance (Reciente)"
+        c2.caption(f"Fuente: {origen} | {hora_local}")
 
-        # TARJETA DE SEÑAL
+        # TARJETA PRINCIPAL
         st.markdown(f"""
-        <div style="background-color: {color_bg}; padding: 20px; border-radius: 12px; border: 1px solid {color_txt}; margin-bottom: 20px;">
-            <h2 style="color: {color_txt}; margin:0; text-align: center;">{estado}</h2>
-            <hr style="border-color: {color_txt}; opacity: 0.2;">
-            <div style="display: flex; justify-content: space-around; color: {color_txt};">
-                <span><b>IA Confianza:</b> {conf:.1%}</span>
-                <span><b>ADX (Fuerza):</b> {adx_val:.1f}</span>
-                <span><b>Sesión:</b> {'🟢 Activa' if sesion_actual else '🔴 Baja'}</span>
-            </div>
+        <div style="background-color: {color_box}; padding: 20px; border-radius: 10px; border-left: 6px solid {text_color}; margin-bottom: 20px;">
+            <h2 style="color: {text_color}; margin:0;">{decision}</h2>
+            <p style="color: {text_color}; margin:0;">
+                IA Confianza: <b>{conf:.1%}</b> | Fuerza (ADX): <b>{adx_val:.1f}</b> | Tendencia: <b>{tendencia}</b>
+            </p>
         </div>
         """, unsafe_allow_html=True)
 
-        # NIVELES DE ENTRADA Y SALIDA (Solo si hay señal o tendencia clara)
-        if "LONG" in estado or "SHORT" in estado:
+        # NIVELES
+        if "LONG" in decision or "SHORT" in decision:
             c_ent, c_sl, c_tp = st.columns(3)
+            c_ent.info(f"📍 Entrada (EMA50): {ema_50:.5f}")
             
-            c_ent.info(f"📍 **Entrada (Pullback):** {ema_50:.5f}")
-            
-            # SL y TP Institucionales (Ratio 1:1.5 o 1:2)
-            if "LONG" in estado:
-                sl = precio - (atr_val * 1.5)
-                tp = precio + (atr_val * 2.5) # Buscamos recorridos largos
+            # SL = 1.5 ATR | TP = 3 ATR (Ratio 1:2)
+            factor = 1.5
+            if "LONG" in decision:
+                sl = precio - (atr_val * factor)
+                tp = precio + (atr_val * (factor * 2))
             else:
-                sl = precio + (atr_val * 1.5)
-                tp = precio - (atr_val * 2.5)
+                sl = precio + (atr_val * factor)
+                tp = precio - (atr_val * (factor * 2))
                 
-            c_sl.error(f"🛑 **Stop Loss:** {sl:.5f}")
-            c_tp.success(f"💰 **Take Profit:** {tp:.5f}")
+            c_sl.error(f"🛑 Stop Loss: {sl:.5f}")
+            c_tp.success(f"💰 Take Profit: {tp:.5f}")
 
-        # GRÁFICO TÉCNICO
-        df_ver = df.tail(100)
+        # GRÁFICO
+        df_ver = df.tail(120)
         fig = go.Figure()
         fig.add_trace(go.Candlestick(x=df_ver.index, open=df_ver['Open'], high=df_ver['High'], low=df_ver['Low'], close=df_ver['Close'], name='Precio'))
         fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['EMA_50'], line=dict(color='cyan', width=1), name="EMA 50"))
         fig.add_trace(go.Scatter(x=df_ver.index, y=df_ver['EMA_200'], line=dict(color='blue', width=2), name="EMA 200"))
-        
         fig.update_layout(template="plotly_white", height=400, xaxis_rangeslider_visible=False, margin=dict(t=10,b=0))
         st.plotly_chart(fig, use_container_width=True)
-        
-        # EXPLICACIÓN IA
-        with st.expander("🧠 ¿Qué está viendo la IA? (Ver Factores)"):
-            imp_df = pd.DataFrame({'Factor': feat_names, 'Peso': importancias}).sort_values(by='Peso', ascending=True)
-            fig_imp = go.Figure(go.Bar(x=imp_df['Peso'], y=imp_df['Factor'], orientation='h', marker_color='#2E86C1'))
-            fig_imp.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0))
-            st.plotly_chart(fig_imp)
 
     else:
-        st.warning("Cargando datos de Forex...")
+        st.error("No se encontraron datos. Verifica que el archivo CSV esté subido o Yahoo funcione.")
 
-# LOOP
 if vigilancia:
     time.sleep(frecuencia)
     st.rerun()
-                    
+            
