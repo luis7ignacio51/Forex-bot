@@ -23,8 +23,8 @@ try:
 except ImportError: HAS_CCXT = False
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Market God AI v24", layout="wide", page_icon="⚡")
-st.title("⚡ Market God AI v24 (Confluencia Multi-Timeframe)")
+st.set_page_config(page_title="Market God AI v24.1", layout="wide", page_icon="⚡")
+st.title("⚡ Market God AI v24.1 (Confluencia Multi-Timeframe)")
 
 tz_bolivia = pytz.timezone('America/La_Paz')
 
@@ -167,13 +167,13 @@ def predecir_ia():
 
 # --- 4. ANÁLISIS DE TENDENCIA MAYOR (H1) ---
 def analizar_tendencia_madre(config):
-    # Bajamos datos de H1 (1 Hora)
+    # CORRECCIÓN AQUÍ: Usamos la variable df_h1 correctamente
     df_h1 = obtener_datos(config, "1h", limite=200)
     if df_h1.empty: return "NEUTRO"
     
-    # Calculamos EMA 50 y EMA 200 en H1
-    df_h1['EMA_50'] = df.ta.ema(df_h1['Close'], length=50)
-    df_h1['EMA_200'] = df.ta.ema(df_h1['Close'], length=200)
+    # Calculamos EMA 50 y EMA 200 en H1 usando df_h1
+    df_h1['EMA_50'] = df_h1.ta.ema(length=50)
+    df_h1['EMA_200'] = df_h1.ta.ema(length=200)
     
     ultimo = df_h1.iloc[-1]
     
@@ -263,3 +263,4 @@ with placeholder.container():
 if vigilancia:
     time.sleep(3 if intervalo == "1m" else 10)
     st.rerun()
+        
